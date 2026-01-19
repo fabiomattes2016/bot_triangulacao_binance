@@ -2,6 +2,7 @@ import asyncio
 import logging
 from decimal import Decimal, ROUND_DOWN
 from datetime import datetime, UTC
+from sqlalchemy import create_engine
 import pandas as pd
 import os
 
@@ -64,6 +65,18 @@ async def get_saldo_usdt(client) -> Decimal:
         
     return Decimal("0")
 
+def save_data_pg(df):
+    engine = create_engine(
+        "postgresql+psycopg2://neondb_owner:npg_ndgz9c2fTRHv@ep-hidden-night-ahsdposa-pooler.c-3.us-east-1.aws.neon.tech/abitrage_bot?sslmode=require&channel_binding=requir"
+    )
+    
+    df.to_sql(
+        "trades",
+        engine,
+        if_exists="append",
+        index=False
+    )   
+    
 
 # ================== ARBITRAGEM ==================
 async def executar():
@@ -175,6 +188,11 @@ async def executar():
 
         log.info("📊 Trade salvo em parquet")
 
+        save_data_pg(df)
+        
+        log.info("📊 Trade salvo no PostgreSQL")
+
+        log.info("✅ Arbitragem finalizada com sucesso")
     except Exception:
         log.exception("❌ Falha na arbitragem")
 
