@@ -67,7 +67,7 @@ async def get_saldo_usdt(client) -> Decimal:
 
 def save_data_pg(df):
     engine = create_engine(
-        "postgresql+psycopg2://neondb_owner:npg_ndgz9c2fTRHv@ep-hidden-night-ahsdposa-pooler.c-3.us-east-1.aws.neon.tech/abitrage_bot?sslmode=require&channel_binding=requir"
+        "postgresql+psycopg2://neondb_owner:npg_ndgz9c2fTRHv@ep-hidden-night-ahsdposa-pooler.c-3.us-east-1.aws.neon.tech/abitrage_bot?sslmode=require&channel_binding=require"
     )
     
     df.to_sql(
