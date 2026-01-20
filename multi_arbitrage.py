@@ -13,19 +13,23 @@ from dotenv import load_dotenv
 
 # ================== CONFIG ==================
 SYMBOLS = ["BTCUSDT", "ETHBTC", "ETHUSDT"]
-CAPITAL_USDT = Decimal("50.0")
+CAPITAL_USDT = Decimal("200")
 MIN_PROFIT = Decimal("0.0004")  # 0.02%
 
 PARQUET_FILE = "trades.parquet"
 
 TESTNET = True
-FAKE_BALANCE = True
+FAKE_BALANCE = False
 
 DUST = {
     "BTC": Decimal("0.000001"),
     "ETH": Decimal("0.00001"),
     "USDT": Decimal("0.01")
 }
+
+TRIANGLES = [
+    {"base": "USDT", "inter": "BTC", "asset": "ETH"},
+]
 
 # ================== LOG ==================
 logging.basicConfig(
@@ -35,6 +39,13 @@ logging.basicConfig(
 log = logging.getLogger()
 
 # ================== UTILS ==================
+def symbols_from_triangle(t):
+    return [
+        f"{t['inter']}{t['base']}",   # BTCUSDT
+        f"{t['asset']}{t['inter']}", # ETHBTC
+        f"{t['asset']}{t['base']}",  # ETHUSDT
+    ]
+
 def ajustar_quantidade(qty: Decimal, step: Decimal) -> str:
     """
     Ajusta a quantidade ao LOT_SIZE e retorna string válida para a Binance
@@ -168,6 +179,17 @@ async def executar():
     load_dotenv()
 
     log.info("Iniciando arbitragem (TESTNET)")
+    
+    for t in TRIANGLES:
+        base = t["base"]
+        inter = t["inter"]
+        asset = t["asset"]
+
+        sym1 = f"{inter}{base}"
+        sym2 = f"{asset}{inter}"
+        sym3 = f"{asset}{base}"
+
+        log.info(f"🔺 Testando triângulo {base} → {inter} → {asset} → {base}")
 
     client = await AsyncClient.create(
         os.getenv("BINANCE_KEY"),
@@ -209,11 +231,15 @@ async def executar():
         eth_usdt = prices["ETHUSDT"]
 
         # ===== SIMULAÇÃO =====
-        btc = CAPITAL_USDT / btc_usdt
-        eth = btc / eth_btc
-        final_usdt = eth * eth_usdt
+        p1 = prices[sym1]  # BTCUSDT
+        p2 = prices[sym2]  # ETHBTC
+        p3 = prices[sym3]  # ETHUSDT
 
-        lucro_pct = (final_usdt - CAPITAL_USDT) / CAPITAL_USDT
+        q_inter = CAPITAL_USDT / p1
+        q_asset = q_inter / p2
+        final_base = q_asset * p3
+
+        lucro_pct = (final_base - CAPITAL_USDT) / CAPITAL_USDT
 
         log.info(f"Spread calculado: {lucro_pct:.5%}")
 
@@ -224,6 +250,11 @@ async def executar():
         log.info("🚀 Arbitragem válida — executando")
 
         # ===== FILTROS =====
+        for s in (sym1, sym2, sym3):
+            if s not in filtros:
+                log.warning(f"{s} não disponível")
+                continue
+        
         lot_btc = Decimal(filtros["BTCUSDT"]["LOT_SIZE"]["stepSize"])
         btc = quantize(btc, lot_btc)
 
@@ -233,102 +264,49 @@ async def executar():
             return
         
         o1 = await client.create_order(
-            symbol="BTCUSDT",
+            symbol=sym1,
             side="BUY",
             type="MARKET",
             quoteOrderQty=str(CAPITAL_USDT)
         )
-        
-        saldo_btc_atual = await verificar_saldo('BTC', fake=FAKE_BALANCE)
-        log.info(f"💰 SALDO BTC ATUAL (FAKE): {saldo_btc_atual}")
-        
-        novo_saldo_btc = saldo_btc_atual + Decimal(o1['executedQty'])
-        log.info(f"💰 NOVO SALDO BTC (FAKE): {novo_saldo_btc}")
-        
-        novo_saldo_usdt = await verificar_saldo('USDT', fake=FAKE_BALANCE) - Decimal(o1['cummulativeQuoteQty'])
-        log.info(f"💰 NOVO SALDO USDT (FAKE): {novo_saldo_usdt}")
-        
-        atualizar_saldo_fake('USDT', novo_saldo_usdt)
-        atualizar_saldo_fake('BTC', novo_saldo_btc)
+
+        inter_recebido = Decimal(o1["executedQty"])
 
         log.info("✔ BTC comprado")
 
         # ===== ORDEM 2 =====
-        if novo_saldo_btc < btc:
-            log.warning("Saldo BTC insuficiente")
-            return
-        
-        saldo_btc_atual = await verificar_saldo('BTC', fake=FAKE_BALANCE)
+        saldo_inter = await verificar_saldo(inter, fake=FAKE_BALANCE)
 
-        step_eth = Decimal(filtros["ETHBTC"]["LOT_SIZE"]["stepSize"])
+        step_asset = Decimal(filtros[sym2]["LOT_SIZE"]["stepSize"])
 
-        # usa TODO o BTC disponível (menos um pequeno buffer de segurança)
-        btc_para_usar = saldo_btc_atual * Decimal("0.999")
-
-        # converte BTC → ETH pelo preço atual
-        qty_eth = (btc_para_usar / eth_btc)
-        qty_eth = quantize(qty_eth, step_eth)
-
-        if qty_eth <= 0:
-            log.warning("Quantidade ETH inválida")
-            return
+        inter_para_usar = saldo_inter * Decimal("0.999")
+        qty_asset = quantize(inter_para_usar / p2, step_asset)
 
         o2 = await client.create_order(
-            symbol="ETHBTC",
+            symbol=sym2,
             side="BUY",
             type="MARKET",
-            quantity=str(qty_eth)
+            quantity=str(qty_asset)
         )
 
-        # 🔒 SALDOS REAIS EXECUTADOS
-        btc_gasto = Decimal(o2["cummulativeQuoteQty"])
-        eth_comprado = Decimal(o2["executedQty"])
-
-        novo_saldo_btc = saldo_btc_atual - btc_gasto
-        novo_saldo_btc = normalizar_saldo(novo_saldo_btc, "BTC")
-        
-        saldo_eth_atual = await verificar_saldo('ETH', fake=FAKE_BALANCE)
-        novo_saldo_eth = saldo_eth_atual + eth_comprado
-        novo_saldo_eth = normalizar_saldo(novo_saldo_eth, "ETH")
-
-        atualizar_saldo_fake("BTC", novo_saldo_btc)
-        atualizar_saldo_fake("ETH", novo_saldo_eth)
+        asset_recebido = Decimal(o2["executedQty"])
 
         log.info("✔ ETH comprado")
 
         # ===== ORDEM 3 =====
-        saldo_eth_atual = await verificar_saldo('ETH', fake=FAKE_BALANCE)
+        saldo_asset = await verificar_saldo(asset, fake=FAKE_BALANCE)
 
-        step_eth_usdt = Decimal(filtros["ETHUSDT"]["LOT_SIZE"]["stepSize"])
+        step_asset_base = Decimal(filtros[sym3]["LOT_SIZE"]["stepSize"])
 
-        # vende TODO o ETH disponível (menos buffer)
-        eth_para_vender = saldo_eth_atual * Decimal("0.999")
-        qty_venda = quantize(eth_para_vender, step_eth_usdt)
-
-        if qty_venda <= 0:
-            log.warning("Quantidade ETH inválida para venda")
-            return
+        asset_para_vender = saldo_asset * Decimal("0.999")
+        qty_venda = quantize(asset_para_vender, step_asset_base)
 
         o3 = await client.create_order(
-            symbol="ETHUSDT",
+            symbol=sym3,
             side="SELL",
             type="MARKET",
             quantity=str(qty_venda)
         )
-
-        # 🔒 VALORES REAIS EXECUTADOS
-        usdt_recebido = Decimal(o3["cummulativeQuoteQty"])
-        eth_vendido = Decimal(o3["executedQty"])
-
-        saldo_usdt_atual = await verificar_saldo('USDT', fake=FAKE_BALANCE)
-        novo_saldo_usdt = saldo_usdt_atual + usdt_recebido
-        novo_saldo_usdt = normalizar_saldo(novo_saldo_usdt, "USDT")
-
-        novo_saldo_eth = saldo_eth_atual - eth_vendido
-        novo_saldo_eth = normalizar_saldo(novo_saldo_eth, "ETH")
-
-        atualizar_saldo_fake("ETH", novo_saldo_eth)
-        atualizar_saldo_fake("USDT", novo_saldo_usdt)
 
         log.info("✔ ETH vendido")
         
