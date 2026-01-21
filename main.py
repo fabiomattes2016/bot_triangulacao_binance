@@ -13,8 +13,9 @@ from dotenv import load_dotenv
 
 # ================== CONFIG ==================
 SYMBOLS = ["BTCUSDT", "ETHBTC", "ETHUSDT"]
-CAPITAL_USDT = Decimal("50.0")
-MIN_PROFIT = Decimal("0.0004")  # 0.02%
+CAPITAL_USDT = Decimal("100.0")
+MIN_PROFIT = Decimal("0.0005")  # 0.02%
+LUCRO_MINIMO = Decimal("0.002")  # 0.2%
 
 PARQUET_FILE = "trades.parquet"
 
@@ -239,6 +240,8 @@ async def executar():
             quoteOrderQty=str(CAPITAL_USDT)
         )
         
+        usdt_investido = Decimal(o1["cummulativeQuoteQty"])
+        
         saldo_btc_atual = await verificar_saldo('BTC', fake=FAKE_BALANCE)
         log.info(f"💰 SALDO BTC ATUAL (FAKE): {saldo_btc_atual}")
         
@@ -297,9 +300,21 @@ async def executar():
         log.info("✔ ETH comprado")
 
         # ===== ORDEM 3 =====
+        usdt_minimo_para_vender = usdt_investido * (Decimal("1.0") + LUCRO_MINIMO)
         saldo_eth_atual = await verificar_saldo('ETH', fake=FAKE_BALANCE)
+        
+        preco_eth_usdt = Decimal(prices["ETHUSDT"])
+        usdt_estimado = qty_venda * preco_eth_usdt
 
         step_eth_usdt = Decimal(filtros["ETHUSDT"]["LOT_SIZE"]["stepSize"])
+        
+        if usdt_estimado < usdt_minimo_para_vender:
+            log.warning(
+                f"🚫 Arbitragem abortada | Retorno estimado {usdt_estimado:.4f} "
+                f"< mínimo {usdt_minimo_para_vender:.4f}"
+            )
+            
+            return
 
         # vende TODO o ETH disponível (menos buffer)
         eth_para_vender = saldo_eth_atual * Decimal("0.999")
