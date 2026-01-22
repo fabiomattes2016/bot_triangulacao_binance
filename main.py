@@ -14,8 +14,8 @@ from dotenv import load_dotenv
 # ================== CONFIG ==================
 SYMBOLS = ["BTCUSDT", "ETHBTC", "ETHUSDT"]
 CAPITAL_USDT = Decimal("100.0")
-MIN_PROFIT = Decimal("0.0005")  # 0.02%
-LUCRO_MINIMO = Decimal("0.002")  # 0.2%
+MIN_PROFIT = Decimal("0.0003")  # 0.03%
+LUCRO_MINIMO = Decimal("0.001")  # 0.1%
 
 PARQUET_FILE = "trades.parquet"
 
